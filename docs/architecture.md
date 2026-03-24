@@ -7,14 +7,16 @@ Enigma is structured into five layers:
 1. Key lifecycle and resolution layer
 - `keymgmt`: key lifecycle interfaces and domain types.
 - `keymgmt/localmlkem`: local ML-KEM key manager implementation.
+- `keymgmt/scwkm`: Scaleway Key Manager lifecycle backend.
 - `resolver`: recipient resolution interfaces and registry.
 - `resolver/localmlkem`: resolves stored local key references into runtime recipients.
+- `resolver/scwkm`: resolves stored Scaleway key references into runtime recipients.
 - Separates key provisioning from runtime wrapping semantics.
 
 2. Recipient / key wrapping layer
 - Defines recipient interface.
 - Wraps and unwraps a random DEK.
-- Supports local PQ recipient (ML-KEM) and cloud-provider stubs with explicit capabilities.
+- Supports local PQ recipient (ML-KEM), Scaleway KMS classical recipient, and cloud-provider stubs with explicit capabilities.
 
 3. Symmetric encryption layer
 - Uses one DEK per encrypted object.
@@ -56,6 +58,15 @@ Enigma is structured into five layers:
 - `RecipientResolver` converts stored `KeyReference` records into runtime `recipient.Recipient` instances.
 - `KeyReference` is stable, serializable metadata that never includes private key material.
 - Application key ownership mapping (for example per tenant or per organization) is handled by the application, not by Enigma.
+
+### Scaleway Backend Notes
+
+- Backend ID: `scaleway_kms`.
+- Security capability: `cloud-classical`.
+- Uses Scaleway Key Manager as root of trust for DEK wrapping and unwrapping.
+- Enigma still performs local content encryption (`XChaCha20-Poly1305` or `AES-256-GCM`).
+- Wrapped DEKs and encrypted payloads are stored and managed by the application.
+- No PQ-native guarantee for this backend.
 
 ### Rotation versus Rewrap
 
