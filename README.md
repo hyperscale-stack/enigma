@@ -12,7 +12,8 @@ Enigma is a pure Go library for high-level document and field encryption using m
 - Rewrap support without content re-encryption when a valid recipient can unwrap the DEK.
 - Separate compact field/value encryption API.
 - Local post-quantum recipient implementation using `crypto/mlkem` (ML-KEM-768 default, ML-KEM-1024 optional).
-- Cloud provider packages present as explicit capability-aware stubs (no fake crypto behavior).
+- Scaleway Key Manager backend for key lifecycle, recipient resolution, and runtime DEK wrap/unwrap using the official Scaleway SDK.
+- GCP/AWS/Azure provider packages present as explicit capability-aware stubs (no fake crypto behavior).
 
 ## Installation
 
@@ -27,11 +28,14 @@ go get github.com/hyperscale-stack/enigma
 - `container`: strict parser/serializer for the binary envelope format.
 - `recipient`: recipient abstractions and capability model.
 - `recipient/localmlkem`: fully implemented local PQ recipient.
-- `recipient/{gcpkms,awskms,azurekv,scwkm}`: explicit cloud stubs for v1.
+- `recipient/scwkm`: Scaleway Key Manager runtime recipient (classical cloud wrapping).
+- `recipient/{gcpkms,awskms,azurekv}`: explicit cloud stubs for v1.
 - `keymgmt`: key lifecycle interfaces and domain types.
 - `keymgmt/localmlkem`: local ML-KEM key manager with filesystem-backed metadata persistence.
+- `keymgmt/scwkm`: Scaleway Key Manager lifecycle backend.
 - `resolver`: recipient resolver interfaces and backend registry.
 - `resolver/localmlkem`: resolves local key references into runtime recipients.
+- `resolver/scwkm`: resolves Scaleway key references into runtime recipients.
 - `mem`: best-effort memory hygiene helpers.
 
 ## Quick Start
@@ -102,6 +106,29 @@ _ = document.EncryptFile(context.Background(), "plain.txt", "plain.txt.enc",
 )
 ```
 
+### Scaleway KMS (classical cloud backend)
+
+```go
+km, _ := keymgmtscwkm.NewManager(keymgmtscwkm.Config{
+    Region:    "fr-par",
+    ProjectID: "<project-id>",
+})
+
+desc, _ := km.CreateKey(context.Background(), keymgmt.CreateKeyRequest{
+    Name:            "org-primary",
+    Purpose:         keymgmt.PurposeKeyWrapping,
+    Algorithm:       keymgmt.AlgorithmAES256GCM,
+    ProtectionLevel: keymgmt.ProtectionKMS,
+})
+
+res, _ := resolverscwkm.New(resolverscwkm.Config{
+    Region:    "fr-par",
+    ProjectID: "<project-id>",
+})
+runtimeRecipient, _ := res.ResolveRecipient(context.Background(), desc.Reference)
+_ = document.EncryptFile(context.Background(), "plain.txt", "plain.txt.enc", document.WithRecipient(runtimeRecipient))
+```
+
 ## Security Properties (Implemented)
 
 - Confidentiality and authenticity of encrypted content when recipients and primitives are used correctly.
@@ -113,7 +140,8 @@ _ = document.EncryptFile(context.Background(), "plain.txt", "plain.txt.enc",
 ## Important Limitations
 
 - Go memory is not fully controllable; key wiping is best-effort only.
-- v1 cloud providers are stubs and return `ErrNotImplemented` for wrapping/unwrapping.
+- Scaleway backend is classical cloud wrapping only and does not provide PQ-native guarantees.
+- GCP/AWS/Azure backend packages are still stubs and return `ErrNotImplemented` for wrapping/unwrapping.
 - Key lifecycle mapping (for example one key per tenant or organization) is application-owned.
 - Recipient metadata (type/key references/capability labels) is inspectable by design and not encrypted.
 - No signatures in v1 (footer/signature area is an extension point only).
@@ -134,6 +162,8 @@ _ = document.EncryptFile(context.Background(), "plain.txt", "plain.txt.enc",
 - `cloud-pq-native`: cloud-backed native PQ path.
 
 The active capability is explicit in recipient descriptors and metadata.
+
+For Scaleway-specific details, see [`docs/backends/scaleway-kms.md`](docs/backends/scaleway-kms.md).
 
 ## Development
 

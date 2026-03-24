@@ -52,6 +52,22 @@ The local backend is implemented in:
 - protect the configured root path with strict OS permissions
 - if host compromise is in scope, local software key storage may be insufficient
 
+## Scaleway Key Manager Backend
+
+The Scaleway backend is implemented in:
+- `keymgmt/scwkm`
+- `resolver/scwkm`
+- `recipient/scwkm`
+
+Properties:
+- cloud classical security level (`cloud_classical`)
+- no native PQ guarantee
+- provider-native key rotation support via Key Manager
+- runtime recipient resolution from stored `KeyReference`
+
+Reference documentation:
+- `docs/backends/scaleway-kms.md`
+
 ## Rotation and Rewrap
 
 Rotation and rewrap are intentionally distinct operations:
