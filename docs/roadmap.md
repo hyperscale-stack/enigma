@@ -4,6 +4,8 @@
 
 - Layered architecture (`recipient`, `container`, `document`, `field`)
 - Local ML-KEM recipient implementation
+- Key lifecycle abstraction (`keymgmt`) and recipient resolution abstraction (`resolver`)
+- Local ML-KEM key manager and resolver implementation
 - Chunked document encryption and stream APIs
 - Rewrap path without content re-encryption
 - Field encryption compact format
@@ -12,8 +14,9 @@
 
 ## Planned Next
 
-1. Cloud backend implementations
-- Replace provider stubs with production integrations.
+1. Provider lifecycle backends
+- Add `KeyManager` and `RecipientResolver` implementations for cloud backends.
+- Keep capability reporting explicit for native rotation versus successor workflows.
 - Add live integration test matrix behind opt-in configuration.
 
 2. Stronger policy controls
@@ -25,7 +28,7 @@
 
 4. Advanced rewrap tooling
 - CLI improvements for inspection/rewrap automation.
-- Batch rewrap workflows.
+- Batch workflows that combine successor-key rotation and explicit rewrap execution.
 
 5. Hardening and observability
 - Additional fuzzing corpora.

@@ -2,14 +2,21 @@
 
 ## Overview
 
-Enigma is structured into four layers:
+Enigma is structured into five layers:
 
-1. Recipient / key wrapping layer
+1. Key lifecycle and resolution layer
+- `keymgmt`: key lifecycle interfaces and domain types.
+- `keymgmt/localmlkem`: local ML-KEM key manager implementation.
+- `resolver`: recipient resolution interfaces and registry.
+- `resolver/localmlkem`: resolves stored local key references into runtime recipients.
+- Separates key provisioning from runtime wrapping semantics.
+
+2. Recipient / key wrapping layer
 - Defines recipient interface.
 - Wraps and unwraps a random DEK.
 - Supports local PQ recipient (ML-KEM) and cloud-provider stubs with explicit capabilities.
 
-2. Symmetric encryption layer
+3. Symmetric encryption layer
 - Uses one DEK per encrypted object.
 - Derives separated subkeys with HKDF-SHA256.
 - Encrypts content using AEAD suites:
@@ -17,14 +24,14 @@ Enigma is structured into four layers:
   - optional: AES-256-GCM
 - Uses chunked authenticated framing for document/blob workloads.
 
-3. Container format layer
+4. Container format layer
 - Implements strict binary envelope parser/serializer.
 - Header split:
   - immutable section (content-bound)
   - recipient section (rewrap-mutable)
 - Header authentication tag is derived from DEK material.
 
-4. High-level API layer
+5. High-level API layer
 - `document` package:
   - `EncryptFile`, `DecryptFile`
   - `NewEncryptWriter`, `NewDecryptReader`
@@ -41,6 +48,21 @@ Enigma is structured into four layers:
   - header authentication key
   - nonce salt
   - reserved material
+
+## Key Lifecycle Model
+
+- `KeyManager` provisions and manages key lifecycle.
+- `Recipient` only performs runtime `WrapKey`/`UnwrapKey`.
+- `RecipientResolver` converts stored `KeyReference` records into runtime `recipient.Recipient` instances.
+- `KeyReference` is stable, serializable metadata that never includes private key material.
+- Application key ownership mapping (for example per tenant or per organization) is handled by the application, not by Enigma.
+
+### Rotation versus Rewrap
+
+- Rotation creates or selects successor keys at lifecycle level.
+- Rewrap updates recipient entries in encrypted documents.
+- Rotation does not automatically re-encrypt existing payloads.
+- Rewrap does not create or rotate backend keys.
 
 ## Rewrap Model
 

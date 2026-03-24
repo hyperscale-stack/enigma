@@ -28,6 +28,10 @@ go get github.com/hyperscale-stack/enigma
 - `recipient`: recipient abstractions and capability model.
 - `recipient/localmlkem`: fully implemented local PQ recipient.
 - `recipient/{gcpkms,awskms,azurekv,scwkm}`: explicit cloud stubs for v1.
+- `keymgmt`: key lifecycle interfaces and domain types.
+- `keymgmt/localmlkem`: local ML-KEM key manager with filesystem-backed metadata persistence.
+- `resolver`: recipient resolver interfaces and backend registry.
+- `resolver/localmlkem`: resolves local key references into runtime recipients.
 - `mem`: best-effort memory hygiene helpers.
 
 ## Quick Start
@@ -79,6 +83,25 @@ plaintext, _ := field.DecryptValue(context.Background(), ciphertext,
 )
 ```
 
+### Key lifecycle and recipient resolution
+
+```go
+km, _ := keymgmtlocalmlkem.NewManager("/var/lib/enigma-keys")
+desc, _ := km.CreateKey(context.Background(), keymgmt.CreateKeyRequest{
+    Name:            "tenant-a-primary",
+    Purpose:         keymgmt.PurposeRecipientDecrypt,
+    Algorithm:       keymgmt.AlgorithmMLKEM768,
+    ProtectionLevel: keymgmt.ProtectionSoftware,
+})
+
+res, _ := resolverlocalmlkem.New("/var/lib/enigma-keys")
+runtimeRecipient, _ := res.ResolveRecipient(context.Background(), desc.Reference)
+
+_ = document.EncryptFile(context.Background(), "plain.txt", "plain.txt.enc",
+    document.WithRecipient(runtimeRecipient),
+)
+```
+
 ## Security Properties (Implemented)
 
 - Confidentiality and authenticity of encrypted content when recipients and primitives are used correctly.
@@ -91,10 +114,18 @@ plaintext, _ := field.DecryptValue(context.Background(), ciphertext,
 
 - Go memory is not fully controllable; key wiping is best-effort only.
 - v1 cloud providers are stubs and return `ErrNotImplemented` for wrapping/unwrapping.
+- Key lifecycle mapping (for example one key per tenant or organization) is application-owned.
 - Recipient metadata (type/key references/capability labels) is inspectable by design and not encrypted.
 - No signatures in v1 (footer/signature area is an extension point only).
 - No deterministic/searchable field encryption in v1.
 - No identity platform, policy engine, or remote API service.
+
+## Lifecycle versus Runtime
+
+- `KeyManager` provisions, inspects, rotates, and deletes keys.
+- `Recipient` only wraps and unwraps DEKs at runtime.
+- `RecipientResolver` resolves a stored `KeyReference` back to a runtime `Recipient`.
+- Key rotation and document rewrap are distinct operations. Rotation creates successor keys; rewrap updates recipient entries in existing encrypted containers.
 
 ## Capability Model
 
@@ -112,6 +143,7 @@ go test ./...
 
 See:
 - [`docs/architecture.md`](docs/architecture.md)
+- [`docs/key-management.md`](docs/key-management.md)
 - [`docs/container-format.md`](docs/container-format.md)
 - [`docs/threat-model.md`](docs/threat-model.md)
 - [`SECURITY.md`](SECURITY.md)
