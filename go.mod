@@ -3,7 +3,7 @@ module github.com/hyperscale-stack/enigma
 go 1.26.0
 
 require (
-	github.com/scaleway/scaleway-sdk-go v1.0.0-beta.36
+	github.com/scaleway/scaleway-sdk-go v1.0.0-beta.37
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.56.0
 )
