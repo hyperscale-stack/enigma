@@ -21,6 +21,8 @@ type mockAPI struct {
 	delFn    func(ctx context.Context, req *keymanager.DeleteKeyRequest) error
 	encFn    func(ctx context.Context, req *keymanager.EncryptRequest) (*keymanager.EncryptResponse, error)
 	decFn    func(ctx context.Context, req *keymanager.DecryptRequest) (*keymanager.DecryptResponse, error)
+	wrapFn   func(ctx context.Context, req *keymanager.WrapKeyRequest) (*keymanager.WrapKeyResponse, error)
+	unwrapFn func(ctx context.Context, req *keymanager.UnwrapKeyRequest) (*keymanager.UnwrapKeyResponse, error)
 }
 
 func managerForTest(t *testing.T, api scwkmapi.Client, region, projectID string) *Manager {
@@ -70,6 +72,20 @@ func (m *mockAPI) Decrypt(ctx context.Context, req *keymanager.DecryptRequest) (
 		return nil, fmt.Errorf("unexpected Decrypt")
 	}
 	return m.decFn(ctx, req)
+}
+
+func (m *mockAPI) WrapKey(ctx context.Context, req *keymanager.WrapKeyRequest) (*keymanager.WrapKeyResponse, error) {
+	if m.wrapFn == nil {
+		return nil, fmt.Errorf("unexpected WrapKey")
+	}
+	return m.wrapFn(ctx, req)
+}
+
+func (m *mockAPI) UnwrapKey(ctx context.Context, req *keymanager.UnwrapKeyRequest) (*keymanager.UnwrapKeyResponse, error) {
+	if m.unwrapFn == nil {
+		return nil, fmt.Errorf("unexpected UnwrapKey")
+	}
+	return m.unwrapFn(ctx, req)
 }
 
 func TestBuildAndResolveReferenceRoundTrip(t *testing.T) {
@@ -131,7 +147,7 @@ func TestCapabilities(t *testing.T) {
 	assert.True(t, caps.CanRotateProviderNative)
 	assert.True(t, caps.CanExportPublicKey)
 	assert.True(t, caps.CanResolveRecipient)
-	assert.False(t, caps.SupportsPQNatively)
+	assert.True(t, caps.SupportsPQNatively)
 	assert.True(t, caps.SupportsClassicalWrapping)
 	assert.True(t, caps.SupportsRewrapWorkflow)
 }
@@ -254,11 +270,11 @@ func TestManagerErrorMappingAndUnsupportedRequests(t *testing.T) {
 
 	_, err = m.CreateKey(context.Background(), keymgmt.CreateKeyRequest{
 		Purpose:         keymgmt.PurposeKeyWrapping,
-		Algorithm:       keymgmt.AlgorithmMLKEM768,
+		Algorithm:       keymgmt.KeyAlgorithm("ml-kem-512"),
 		ProtectionLevel: keymgmt.ProtectionKMS,
 	})
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, enigma.ErrKeyAlgorithmMismatch))
+	assert.True(t, errors.Is(err, enigma.ErrUnsupportedAlgorithm))
 
 	_, err = m.CreateKey(context.Background(), keymgmt.CreateKeyRequest{
 		Purpose:         keymgmt.PurposeKeyWrapping,
@@ -298,4 +314,118 @@ func TestAlgorithmUsageMapping(t *testing.T) {
 	_, _, err = algorithmAndClassFromUsage(nil)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, enigma.ErrUnsupportedAlgorithm))
+}
+
+func TestCreateKeyDefaultsToMLKEM1024(t *testing.T) {
+	algKEM := keymanager.KeyAlgorithmKeyEncapsulationMlKem1024
+	api := &mockAPI{}
+	api.createFn = func(_ context.Context, req *keymanager.CreateKeyRequest) (*keymanager.Key, error) {
+		if assert.NotNil(t, req.Usage) && assert.NotNil(t, req.Usage.KeyEncapsulation) {
+			assert.Equal(t, algKEM, *req.Usage.KeyEncapsulation)
+		}
+		assert.Nil(t, req.Usage.SymmetricEncryption)
+		assert.Nil(t, req.Usage.AsymmetricEncryption)
+		return &keymanager.Key{
+			ID:            "k-kem",
+			ProjectID:     "project-a",
+			Usage:         &keymanager.KeyUsage{KeyEncapsulation: &algKEM},
+			RotationCount: 0,
+			Region:        scw.RegionFrPar,
+			State:         keymanager.KeyStateEnabled,
+			Origin:        keymanager.KeyOriginScalewayKms,
+		}, nil
+	}
+
+	m := managerForTest(t, api, "fr-par", "project-a")
+
+	desc, err := m.CreateKey(context.Background(), keymgmt.CreateKeyRequest{
+		Name:            "tenant-pq",
+		Purpose:         keymgmt.PurposeKeyWrapping,
+		ProtectionLevel: keymgmt.ProtectionKMS,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, keymgmt.AlgorithmMLKEM1024, desc.Algorithm)
+	assert.Equal(t, keymgmt.KeyClassAsymmetricKEM, desc.Class)
+	assert.Equal(t, keymgmt.SecurityLevelCloudPQNative, desc.SecurityLevel)
+	assert.True(t, desc.Capabilities.SupportsPQNatively)
+	assert.Contains(t, desc.Reference.URI, "alg=ml-kem-1024")
+
+	resolved, err := ResolveReference(desc.Reference, "")
+	assert.NoError(t, err)
+	assert.Equal(t, keymgmt.AlgorithmMLKEM1024, resolved.Algorithm)
+}
+
+func TestCreateKeyMLKEM768WithEncapsulationPurpose(t *testing.T) {
+	algKEM := keymanager.KeyAlgorithmKeyEncapsulationMlKem768
+	api := &mockAPI{}
+	api.createFn = func(_ context.Context, req *keymanager.CreateKeyRequest) (*keymanager.Key, error) {
+		if assert.NotNil(t, req.Usage) && assert.NotNil(t, req.Usage.KeyEncapsulation) {
+			assert.Equal(t, algKEM, *req.Usage.KeyEncapsulation)
+		}
+		return &keymanager.Key{
+			ID:        "k-kem-768",
+			ProjectID: "project-a",
+			Usage:     &keymanager.KeyUsage{KeyEncapsulation: &algKEM},
+			Region:    scw.RegionFrPar,
+			State:     keymanager.KeyStateEnabled,
+			Origin:    keymanager.KeyOriginScalewayKms,
+		}, nil
+	}
+
+	m := managerForTest(t, api, "fr-par", "project-a")
+
+	desc, err := m.CreateKey(context.Background(), keymgmt.CreateKeyRequest{
+		Purpose:   keymgmt.PurposeKeyEncapsulation,
+		Algorithm: keymgmt.AlgorithmMLKEM768,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, keymgmt.AlgorithmMLKEM768, desc.Algorithm)
+	assert.Equal(t, keymgmt.PurposeKeyEncapsulation, desc.Purpose)
+	assert.Equal(t, keymgmt.SecurityLevelCloudPQNative, desc.SecurityLevel)
+	assert.Contains(t, desc.Reference.URI, "alg=ml-kem-768")
+}
+
+func TestKEMAlgorithmUsageMapping(t *testing.T) {
+	for _, tc := range []struct {
+		alg   keymgmt.KeyAlgorithm
+		usage keymanager.KeyAlgorithmKeyEncapsulation
+	}{
+		{keymgmt.AlgorithmMLKEM768, keymanager.KeyAlgorithmKeyEncapsulationMlKem768},
+		{keymgmt.AlgorithmMLKEM1024, keymanager.KeyAlgorithmKeyEncapsulationMlKem1024},
+	} {
+		usage, class, err := usageForAlgorithm(tc.alg)
+		assert.NoError(t, err)
+		assert.Equal(t, keymgmt.KeyClassAsymmetricKEM, class)
+		if assert.NotNil(t, usage.KeyEncapsulation) {
+			assert.Equal(t, tc.usage, *usage.KeyEncapsulation)
+		}
+
+		alg, outClass, err := algorithmAndClassFromUsage(usage)
+		assert.NoError(t, err)
+		assert.Equal(t, tc.alg, alg)
+		assert.Equal(t, keymgmt.KeyClassAsymmetricKEM, outClass)
+	}
+
+	unknown := keymanager.KeyAlgorithmKeyEncapsulationUnknownKeyEncapsulation
+	_, _, err := algorithmAndClassFromUsage(&keymanager.KeyUsage{KeyEncapsulation: &unknown})
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, enigma.ErrUnsupportedAlgorithm))
+}
+
+func TestReferenceAlgorithmParsing(t *testing.T) {
+	ref := BuildReferenceWithAlgorithm("k-1", scw.RegionFrPar, "proj-1", "3", keymgmt.AlgorithmMLKEM1024)
+	resolved, err := ResolveReference(ref, "")
+	assert.NoError(t, err)
+	assert.Equal(t, keymgmt.AlgorithmMLKEM1024, resolved.Algorithm)
+
+	legacy := BuildReference("k-1", scw.RegionFrPar, "proj-1", "3")
+	resolvedLegacy, err := ResolveReference(legacy, "")
+	assert.NoError(t, err)
+	assert.Equal(t, keymgmt.KeyAlgorithm(""), resolvedLegacy.Algorithm)
+	assert.NotContains(t, legacy.URI, "alg=")
+
+	bad := keymgmt.KeyReference{Backend: BackendName, URI: "enigma-scwkm://key/k-1?region=fr-par&alg=ml-kem-512"}
+	_, err = ResolveReference(bad, "")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, enigma.ErrInvalidKeyReference))
 }

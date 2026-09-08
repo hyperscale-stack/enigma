@@ -60,8 +60,8 @@ The Scaleway backend is implemented in:
 - `recipient/scwkm`
 
 Properties:
-- cloud classical security level (`cloud_classical`)
-- no native PQ guarantee
+- native PQ security level (`cloud_pq_native`) for ML-KEM keys, `cloud_classical` for AES/RSA keys
+- `ml-kem-1024` is the default algorithm when a create request omits one
 - provider-native key rotation support via Key Manager
 - runtime recipient resolution from stored `KeyReference`
 

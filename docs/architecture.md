@@ -16,7 +16,7 @@ Enigma is structured into five layers:
 2. Recipient / key wrapping layer
 - Defines recipient interface.
 - Wraps and unwraps a random DEK.
-- Supports local PQ recipient (ML-KEM), Scaleway KMS classical recipient, and cloud-provider stubs with explicit capabilities.
+- Supports local PQ recipient (ML-KEM), Scaleway KMS recipient (native ML-KEM or classical wrapping), and cloud-provider stubs with explicit capabilities.
 
 3. Symmetric encryption layer
 - Uses one DEK per encrypted object.
@@ -62,11 +62,11 @@ Enigma is structured into five layers:
 ### Scaleway Backend Notes
 
 - Backend ID: `scaleway_kms`.
-- Security capability: `cloud-classical`.
+- Security capability: `cloud-pq-native` for ML-KEM keys, `cloud-classical` for AES/RSA keys.
 - Uses Scaleway Key Manager as root of trust for DEK wrapping and unwrapping.
 - Enigma still performs local content encryption (`XChaCha20-Poly1305` or `AES-256-GCM`).
 - Wrapped DEKs and encrypted payloads are stored and managed by the application.
-- No PQ-native guarantee for this backend.
+- ML-KEM keys are wrapped natively by Key Manager; the private key never leaves Scaleway.
 
 ### Rotation versus Rewrap
 

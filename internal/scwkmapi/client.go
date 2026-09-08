@@ -27,6 +27,8 @@ type Client interface {
 	DeleteKey(ctx context.Context, req *keymanager.DeleteKeyRequest) error
 	Encrypt(ctx context.Context, req *keymanager.EncryptRequest) (*keymanager.EncryptResponse, error)
 	Decrypt(ctx context.Context, req *keymanager.DecryptRequest) (*keymanager.DecryptResponse, error)
+	WrapKey(ctx context.Context, req *keymanager.WrapKeyRequest) (*keymanager.WrapKeyResponse, error)
+	UnwrapKey(ctx context.Context, req *keymanager.UnwrapKeyRequest) (*keymanager.UnwrapKeyResponse, error)
 }
 
 type SDKClient struct {
@@ -89,4 +91,12 @@ func (c *SDKClient) Encrypt(ctx context.Context, req *keymanager.EncryptRequest)
 
 func (c *SDKClient) Decrypt(ctx context.Context, req *keymanager.DecryptRequest) (*keymanager.DecryptResponse, error) {
 	return c.api.Decrypt(req, scw.WithContext(ctx))
+}
+
+func (c *SDKClient) WrapKey(ctx context.Context, req *keymanager.WrapKeyRequest) (*keymanager.WrapKeyResponse, error) {
+	return c.api.WrapKey(req, scw.WithContext(ctx))
+}
+
+func (c *SDKClient) UnwrapKey(ctx context.Context, req *keymanager.UnwrapKeyRequest) (*keymanager.UnwrapKeyResponse, error) {
+	return c.api.UnwrapKey(req, scw.WithContext(ctx))
 }

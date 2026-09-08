@@ -27,7 +27,13 @@ const (
 	metadataRotationCount    = "rotation_count"
 	metadataKeyName          = "key_name"
 	metadataRequestedPurpose = "requested_purpose"
+	referenceParamAlgorithm  = "alg"
 )
+
+// DefaultAlgorithm is used by CreateKey when the request does not pin an algorithm.
+// Scaleway Key Manager exposes ML-KEM as a native key encapsulation usage, so the
+// backend defaults to the strongest available post-quantum parameter set.
+const DefaultAlgorithm = keymgmt.AlgorithmMLKEM1024
 
 type Config = scwkmapi.Config
 
@@ -42,6 +48,7 @@ type Reference struct {
 	Region    scw.Region
 	ProjectID string
 	Version   string
+	Algorithm keymgmt.KeyAlgorithm
 	URI       string
 }
 
@@ -54,16 +61,20 @@ func NewManager(cfg Config) (*Manager, error) {
 }
 
 func (m *Manager) CreateKey(ctx context.Context, req keymgmt.CreateKeyRequest) (*keymgmt.KeyDescriptor, error) {
-	if req.Algorithm == "" {
-		return nil, enigma.WrapError("keymgmt/scwkm.CreateKey", enigma.ErrInvalidArgument, fmt.Errorf("missing key algorithm"))
+	algorithm := req.Algorithm
+	if algorithm == "" {
+		algorithm = DefaultAlgorithm
 	}
 	if req.Purpose == "" {
 		return nil, enigma.WrapError("keymgmt/scwkm.CreateKey", enigma.ErrInvalidArgument, fmt.Errorf("missing key purpose"))
 	}
-	if req.Purpose == keymgmt.PurposeKeyEncapsulation {
-		return nil, enigma.WrapError("keymgmt/scwkm.CreateKey", enigma.ErrUnsupportedCapability, fmt.Errorf("purpose %q requires KEM capabilities not provided by this backend", req.Purpose))
-	}
-	if req.Purpose != keymgmt.PurposeKeyWrapping && req.Purpose != keymgmt.PurposeRecipientDecrypt {
+	switch req.Purpose {
+	case keymgmt.PurposeKeyWrapping, keymgmt.PurposeRecipientDecrypt:
+	case keymgmt.PurposeKeyEncapsulation:
+		if !isKEMAlgorithm(algorithm) {
+			return nil, enigma.WrapError("keymgmt/scwkm.CreateKey", enigma.ErrUnsupportedCapability, fmt.Errorf("purpose %q requires a key encapsulation algorithm, got %q", req.Purpose, algorithm))
+		}
+	default:
 		return nil, enigma.WrapError("keymgmt/scwkm.CreateKey", enigma.ErrInvalidArgument, fmt.Errorf("unsupported key purpose %q", req.Purpose))
 	}
 	if req.Exportable {
@@ -73,7 +84,7 @@ func (m *Manager) CreateKey(ctx context.Context, req keymgmt.CreateKeyRequest) (
 		return nil, enigma.WrapError("keymgmt/scwkm.CreateKey", enigma.ErrUnsupportedCapability, fmt.Errorf("protection level %q is not supported by scaleway kms backend", req.ProtectionLevel))
 	}
 
-	usage, _, err := usageForAlgorithm(req.Algorithm)
+	usage, _, err := usageForAlgorithm(algorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -161,17 +172,24 @@ func capabilitySet() keymgmt.CapabilitySet {
 		CanRotateProviderNative:   true,
 		CanExportPublicKey:        true,
 		CanResolveRecipient:       true,
-		SupportsPQNatively:        false,
+		SupportsPQNatively:        true,
 		SupportsClassicalWrapping: true,
 		SupportsRewrapWorkflow:    true,
 	}
 }
 
 func BuildReference(keyID string, region scw.Region, projectID, version string) keymgmt.KeyReference {
+	return BuildReferenceWithAlgorithm(keyID, region, projectID, version, "")
+}
+
+// BuildReferenceWithAlgorithm pins the key algorithm in the reference URI so runtime
+// recipients can select the wrapping path (native ML-KEM wrap versus classical encrypt)
+// without an extra Key Manager round trip. An empty algorithm keeps the legacy URI shape.
+func BuildReferenceWithAlgorithm(keyID string, region scw.Region, projectID, version string, alg keymgmt.KeyAlgorithm) keymgmt.KeyReference {
 	if version == "" {
 		version = defaultReferenceVersion
 	}
-	uri := buildURI(keyID, region, projectID, version)
+	uri := buildURI(keyID, region, projectID, version, alg)
 	return keymgmt.KeyReference{
 		Backend: BackendName,
 		URI:     uri,
@@ -202,6 +220,7 @@ func ResolveReference(ref keymgmt.KeyReference, fallbackRegion scw.Region) (Refe
 		}
 		resolved.ProjectID = parsed.ProjectID
 		resolved.Region = parsed.Region
+		resolved.Algorithm = parsed.Algorithm
 	}
 	if resolved.KeyID == "" {
 		return Reference{}, enigma.WrapError("keymgmt/scwkm.ResolveReference", enigma.ErrInvalidKeyReference, fmt.Errorf("missing key id"))
@@ -216,7 +235,7 @@ func ResolveReference(ref keymgmt.KeyReference, fallbackRegion scw.Region) (Refe
 		resolved.Version = defaultReferenceVersion
 	}
 	if resolved.URI == "" {
-		resolved.URI = buildURI(resolved.KeyID, resolved.Region, resolved.ProjectID, resolved.Version)
+		resolved.URI = buildURI(resolved.KeyID, resolved.Region, resolved.ProjectID, resolved.Version, resolved.Algorithm)
 	}
 	return resolved, nil
 }
@@ -243,6 +262,13 @@ func parseReferenceURI(raw string) (Reference, error) {
 		Version:   q.Get("version"),
 		ProjectID: q.Get(metadataProjectID),
 	}
+	if rawAlg := q.Get(referenceParamAlgorithm); rawAlg != "" {
+		alg, err := parseAlgorithm(rawAlg)
+		if err != nil {
+			return Reference{}, err
+		}
+		parsed.Algorithm = alg
+	}
 	if rawRegion := q.Get(metadataRegion); rawRegion != "" {
 		region, err := scw.ParseRegion(rawRegion)
 		if err != nil {
@@ -253,7 +279,7 @@ func parseReferenceURI(raw string) (Reference, error) {
 	return parsed, nil
 }
 
-func buildURI(keyID string, region scw.Region, projectID, version string) string {
+func buildURI(keyID string, region scw.Region, projectID, version string, alg keymgmt.KeyAlgorithm) string {
 	u := &url.URL{Scheme: referenceScheme, Host: referenceHost, Path: "/" + url.PathEscape(keyID)}
 	q := u.Query()
 	q.Set(metadataRegion, string(region))
@@ -263,8 +289,32 @@ func buildURI(keyID string, region scw.Region, projectID, version string) string
 	if version != "" {
 		q.Set("version", version)
 	}
+	if alg != "" {
+		q.Set(referenceParamAlgorithm, string(alg))
+	}
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// parseAlgorithm validates an algorithm carried by a reference URI. Only algorithms this
+// backend can actually map to a Scaleway key usage are accepted.
+func parseAlgorithm(raw string) (keymgmt.KeyAlgorithm, error) {
+	alg := keymgmt.KeyAlgorithm(raw)
+	if _, _, err := usageForAlgorithm(alg); err != nil {
+		return "", enigma.WrapError("keymgmt/scwkm.ResolveReference", enigma.ErrInvalidKeyReference, fmt.Errorf("invalid algorithm %q", raw))
+	}
+	return alg, nil
+}
+
+func isKEMAlgorithm(alg keymgmt.KeyAlgorithm) bool {
+	switch alg {
+	case keymgmt.AlgorithmMLKEM768, keymgmt.AlgorithmMLKEM1024:
+		return true
+	case keymgmt.AlgorithmAES256GCM, keymgmt.AlgorithmRSAOAEP3072SHA256:
+		return false
+	default:
+		return false
+	}
 }
 
 func descriptorFromKey(k *keymanager.Key, requestedPurpose keymgmt.KeyPurpose, metadata map[string]string) (*keymgmt.KeyDescriptor, error) {
@@ -277,7 +327,7 @@ func descriptorFromKey(k *keymanager.Key, requestedPurpose keymgmt.KeyPurpose, m
 	}
 
 	version := strconv.FormatUint(uint64(k.RotationCount), 10)
-	ref := BuildReference(k.ID, k.Region, k.ProjectID, version)
+	ref := BuildReferenceWithAlgorithm(k.ID, k.Region, k.ProjectID, version, alg)
 
 	merged := map[string]string{
 		metadataRegion:        string(k.Region),
@@ -302,11 +352,25 @@ func descriptorFromKey(k *keymanager.Key, requestedPurpose keymgmt.KeyPurpose, m
 		Class:         class,
 		Purpose:       requestedPurpose,
 		Algorithm:     alg,
-		SecurityLevel: keymgmt.SecurityLevelCloudClassic,
+		SecurityLevel: securityLevelFromClass(class),
 		Reference:     ref,
 		Capabilities:  capabilitySet(),
 		Metadata:      merged,
 	}, nil
+}
+
+// securityLevelFromClass reports the guarantee actually delivered by the provisioned key:
+// ML-KEM keys are wrapped by Scaleway itself, so they are cloud PQ-native, while RSA/AES
+// keys stay classical cloud cryptography.
+func securityLevelFromClass(class keymgmt.KeyClass) keymgmt.SecurityLevel {
+	switch class {
+	case keymgmt.KeyClassAsymmetricKEM:
+		return keymgmt.SecurityLevelCloudPQNative
+	case keymgmt.KeyClassAsymmetricEncryption, keymgmt.KeyClassSymmetricWrapping:
+		return keymgmt.SecurityLevelCloudClassic
+	default:
+		return keymgmt.SecurityLevelCloudClassic
+	}
 }
 
 func purposeFromClass(class keymgmt.KeyClass) keymgmt.KeyPurpose {
@@ -328,8 +392,12 @@ func usageForAlgorithm(alg keymgmt.KeyAlgorithm) (*keymanager.KeyUsage, keymgmt.
 	case keymgmt.AlgorithmRSAOAEP3072SHA256:
 		usage := keymanager.KeyAlgorithmAsymmetricEncryptionRsaOaep3072Sha256
 		return &keymanager.KeyUsage{AsymmetricEncryption: &usage}, keymgmt.KeyClassAsymmetricEncryption, nil
-	case keymgmt.AlgorithmMLKEM768, keymgmt.AlgorithmMLKEM1024:
-		return nil, "", enigma.WrapError("keymgmt/scwkm.usageForAlgorithm", enigma.ErrKeyAlgorithmMismatch, fmt.Errorf("algorithm %q requires PQ support not provided by scaleway kms", alg))
+	case keymgmt.AlgorithmMLKEM768:
+		usage := keymanager.KeyAlgorithmKeyEncapsulationMlKem768
+		return &keymanager.KeyUsage{KeyEncapsulation: &usage}, keymgmt.KeyClassAsymmetricKEM, nil
+	case keymgmt.AlgorithmMLKEM1024:
+		usage := keymanager.KeyAlgorithmKeyEncapsulationMlKem1024
+		return &keymanager.KeyUsage{KeyEncapsulation: &usage}, keymgmt.KeyClassAsymmetricKEM, nil
 	default:
 		return nil, "", enigma.WrapError("keymgmt/scwkm.usageForAlgorithm", enigma.ErrUnsupportedAlgorithm, fmt.Errorf("algorithm %q", alg))
 	}
@@ -361,6 +429,18 @@ func algorithmAndClassFromUsage(usage *keymanager.KeyUsage) (keymgmt.KeyAlgorith
 			return "", "", enigma.WrapError("keymgmt/scwkm.algorithmAndClassFromUsage", enigma.ErrUnsupportedAlgorithm, fmt.Errorf("unsupported asymmetric usage %q", usage.AsymmetricEncryption.String()))
 		default:
 			return "", "", enigma.WrapError("keymgmt/scwkm.algorithmAndClassFromUsage", enigma.ErrUnsupportedAlgorithm, fmt.Errorf("unsupported asymmetric usage %q", usage.AsymmetricEncryption.String()))
+		}
+	}
+	if usage.KeyEncapsulation != nil {
+		switch *usage.KeyEncapsulation {
+		case keymanager.KeyAlgorithmKeyEncapsulationUnknownKeyEncapsulation:
+			return "", "", enigma.WrapError("keymgmt/scwkm.algorithmAndClassFromUsage", enigma.ErrUnsupportedAlgorithm, fmt.Errorf("unknown key encapsulation usage"))
+		case keymanager.KeyAlgorithmKeyEncapsulationMlKem768:
+			return keymgmt.AlgorithmMLKEM768, keymgmt.KeyClassAsymmetricKEM, nil
+		case keymanager.KeyAlgorithmKeyEncapsulationMlKem1024:
+			return keymgmt.AlgorithmMLKEM1024, keymgmt.KeyClassAsymmetricKEM, nil
+		default:
+			return "", "", enigma.WrapError("keymgmt/scwkm.algorithmAndClassFromUsage", enigma.ErrUnsupportedAlgorithm, fmt.Errorf("unsupported key encapsulation usage %q", usage.KeyEncapsulation.String()))
 		}
 	}
 	return "", "", enigma.WrapError("keymgmt/scwkm.algorithmAndClassFromUsage", enigma.ErrUnsupportedAlgorithm, fmt.Errorf("usage is not supported for envelope wrapping"))
