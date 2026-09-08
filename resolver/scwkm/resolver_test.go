@@ -8,7 +8,9 @@ import (
 
 	"github.com/hyperscale-stack/enigma"
 	"github.com/hyperscale-stack/enigma/keymgmt"
+	keymgmtscwkm "github.com/hyperscale-stack/enigma/keymgmt/scwkm"
 	"github.com/hyperscale-stack/enigma/recipient"
+	"github.com/scaleway/scaleway-sdk-go/scw"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -71,4 +73,27 @@ func TestResolveRecipientErrorMapping(t *testing.T) {
 	_, err = r.ResolveRecipient(context.Background(), keymgmt.KeyReference{Backend: "scaleway_kms", ID: "k1"})
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, enigma.ErrResolveRecipientFailed))
+}
+
+func TestResolveRecipientPreservesReferenceAlgorithm(t *testing.T) {
+	const projectID = "11111111-2222-3333-4444-555555555555"
+
+	r, err := New(Config{Region: "fr-par", ProjectID: projectID})
+	assert.NoError(t, err)
+
+	pqRef := keymgmtscwkm.BuildReferenceWithAlgorithm("k-kem", scw.RegionFrPar, projectID, "1", keymgmt.AlgorithmMLKEM1024)
+
+	pq, err := r.ResolveRecipient(context.Background(), pqRef)
+	assert.NoError(t, err)
+	if assert.NotNil(t, pq) {
+		assert.Equal(t, recipient.CapabilityCloudPQNative, pq.Descriptor().Capability)
+	}
+
+	classicalRef := keymgmtscwkm.BuildReference("k-classical", scw.RegionFrPar, projectID, "1")
+
+	classical, err := r.ResolveRecipient(context.Background(), classicalRef)
+	assert.NoError(t, err)
+	if assert.NotNil(t, classical) {
+		assert.Equal(t, recipient.CapabilityCloudClassical, classical.Descriptor().Capability)
+	}
 }

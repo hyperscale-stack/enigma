@@ -10,6 +10,7 @@
   - `keymgmt/scwkm` lifecycle implementation
   - `recipient/scwkm` runtime DEK wrap/unwrap
   - `resolver/scwkm` key-reference resolution
+  - native ML-KEM wrapping (`ml-kem-1024` default, `ml-kem-768` supported)
 - Chunked document encryption and stream APIs
 - Rewrap path without content re-encryption
 - Field encryption compact format
@@ -24,6 +25,7 @@
 - Keep unsupported capabilities explicit; no fake cloud behavior.
 
 2. Scaleway integration hardening
+- Repin `scaleway-sdk-go` on a released tag once ML-KEM ships in `v1.0.0-beta.38`.
 - Add opt-in live integration tests (credential-gated) for create/get/rotate/delete and wrap/unwrap flows.
 - Add operational guidance for key policies and production rollout checks.
 
